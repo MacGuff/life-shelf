@@ -1,25 +1,63 @@
-FROM mcr.microsoft.com/devcontainers/java:1-17-bullseye
+FROM mcr.microsoft.com/vscode/devcontainers/python:1-3.11-bullseye
 
-ARG INSTALL_MAVEN="true"
-ARG MAVEN_VERSION=""
+# Docker script args, location, and expected SHA - SHA generated on release
+ARG USERNAME=vscode
+ARG USER_UID=1000
+ARG USER_GID=$USER_UID
+ARG DOCKER_SCRIPT_SOURCE="https://raw.githubusercontent.com/microsoft/vscode-dev-containers/master/script-library/docker-debian.sh"
+ARG DOCKER_SCRIPT_SHA="dev-mode"
+ARG ENABLE_NONROOT_DOCKER="true"
+ARG SOURCE_SOCKET=/var/run/docker-host.sock
+ARG TARGET_SOCKET=/var/run/docker.sock
 
-ARG INSTALL_GRADLE="false"
-ARG GRADLE_VERSION=""
 
+RUN apt-get update \
+    && export DEBIAN_FRONTEND=noninteractive \
+    # Verify common dependencies and utilities are installed
+    && apt-get -y install --no-install-recommends apt-utils dialog git openssh-client curl less iproute2 procps 2>&1 \
+    #
+    # Create a non-root user to use if not already available - see https://aka.ms/vscode-remote/containers/non-root-user.
+    && if [ $(getent passwd $USERNAME) ]; then \
+    # If exists, see if we need to tweak the GID/UID
+    if [ "$USER_GID" != "1000" ] || [ "$USER_UID" != "1000" ]; then \
+    groupmod --gid $USER_GID $USERNAME \
+    && usermod --uid $USER_UID --gid $USER_GID $USERNAME \
+    && chown -R $USER_UID:$USER_GID /home/$USERNAME; \
+    fi; \
+    else \
+    # Otherwise ccreate the non-root user
+    groupadd --gid $USER_GID $USERNAME \
+    && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME \
+    # Add sudo support for the non-root user
+    && apt-get install -y sudo \
+    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME\
+    && chmod 0440 /etc/sudoers.d/$USERNAME; \
+    fi \
+    #
+    # Use Docker script from vscode script library to set things up
+    && curl -sSL $DOCKER_SCRIPT_SOURCE -o /tmp/docker-setup.sh \
+    && ([ "${DOCKER_SCRIPT_SHA}" = "dev-mode" ] || (echo "${DOCKER_SCRIPT_SHA} */tmp/docker-setup.sh" | sha256sum -c -)) \
+    && /bin/bash /tmp/docker-setup.sh "${ENABLE_NONROOT_DOCKER}" "${SOURCE_SOCKET}" "${TARGET_SOCKET}" "${USERNAME}" \
+    && rm /tmp/docker-setup.sh
 
-RUN if [ "${INSTALL_MAVEN}" = "true" ]; then su vscode -c "umask 0002 && . /usr/local/sdkman/bin/sdkman-init.sh && sdk install maven \"${MAVEN_VERSION}\""; fi \
-    && if [ "${INSTALL_GRADLE}" = "true" ]; then su vscode -c "umask 0002 && . /usr/local/sdkman/bin/sdkman-init.sh && sdk install gradle \"${GRADLE_VERSION}\""; fi
+# Install NVM, NPM and Node
+RUN curl -sSL -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.35.3/install.sh | bash \
+    && bash -c 'source $NVM_DIR/nvm.sh \
+    && nvm install --lts \
+    && npm install -g prettier@2.0.5'
 
-COPY scripts/settings.xml /home/vscode/.m2/
-RUN chown -R vscode /home/vscode/.m2/
+ENV PIPX_INSTAL="${PIPX_BIN_DIR}/pipx install --system-site-packages --pip-args=--no-cache-dir --pip-args=--force-reinstall"
 
-# [Optional] Uncomment this section to install additional OS packages.
-RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends build-essential libssl-dev python3 python3-pip python3-venv
+# Setup additional python tools in a venv via pipx to avoid conflicts
+RUN ${PIPX_INSTAL} poetry \
+    && ${PIPX_INSTAL} pip-tools \
+    && ${PIPX_INSTAL} pre-commit \
+    && chown -R ${USER_UID}:${USER_GID} ${PIPX_HOME}
 
-RUN python3 -m pip install --upgrade pip \
-    && pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+RUN apt-get install --no-install-recommends -y supervisor
 
-# [Optional] Uncomment this line to install global node packages.
-RUN su vscode -c ". ${NVM_DIR}/nvm.sh && nvm install node && \
-npm config set registry https://registry.npmmirror.com" 2>&1
+RUN mkdir -p /var/log/supervisor
+RUN mkdir -p /etc/supervisor/conf.d/
+
+ENTRYPOINT [ "/usr/local/share/docker-init.sh" ]
+CMD [ "sleep", "infinity" ]
