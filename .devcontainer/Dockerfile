@@ -44,7 +44,8 @@ RUN apt-get update \
 RUN curl -sSL -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.35.3/install.sh | bash \
     && bash -c 'source $NVM_DIR/nvm.sh \
     && nvm install --lts \
-    && npm install -g prettier@2.0.5'
+    && npm install -g prettier@2.0.5' \
+    && npm config set registry https://registry.npmmirror.com
 
 ENV PIPX_INSTAL="${PIPX_BIN_DIR}/pipx install --system-site-packages --pip-args=--no-cache-dir --pip-args=--force-reinstall"
 
